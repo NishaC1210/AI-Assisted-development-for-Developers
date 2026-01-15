@@ -1,0 +1,17 @@
+{
+  "name": "dashboard-app",
+  "version": "1.0.0",
+  "description": "Dashboard application with user authentication",
+  "scripts": {
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm start",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "db:init": "cd backend && npm run db:init"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
+
