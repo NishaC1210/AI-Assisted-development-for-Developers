@@ -120,12 +120,18 @@
 }
 
 .sidebar-collapsed .sidebar-header {
+  height: auto;
+  min-height: var(--topbar-height);
+  flex-direction: column;
   justify-content: center;
-  padding: 20px 12px;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 12px;
 }
 
 .sidebar-collapsed .sidebar-toggle {
-  display: none;
+  position: relative;
+  z-index: 10;
 }
 
 .sidebar-collapsed .nav-item {
