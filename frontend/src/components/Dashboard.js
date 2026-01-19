@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { ConfirmModal } from './Modal';
+import { ConfirmModal, AISummaryModal } from './Modal';
 import './Dashboard.css';
 
 const API_URL = 'http://localhost:5000/api';
@@ -28,6 +28,13 @@ const Dashboard = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [noteToDelete, setNoteToDelete] = useState(null);
   const [savingNote, setSavingNote] = useState(false);
+
+  // AI Summary state
+  const [showAISummary, setShowAISummary] = useState(false);
+  const [aiSummary, setAiSummary] = useState('');
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
+  const [aiSummaryError, setAiSummaryError] = useState(null);
+  const [aiSummaryNoteTitle, setAiSummaryNoteTitle] = useState('');
 
   // Fetch notes on mount
   const fetchNotes = useCallback(async () => {
@@ -244,6 +251,47 @@ const Dashboard = () => {
     return date.toLocaleDateString();
   };
 
+  // AI Summary handler
+  const handleGenerateSummary = async () => {
+    if (!selectedNote) return;
+
+    setShowAISummary(true);
+    setAiSummaryLoading(true);
+    setAiSummaryError(null);
+    setAiSummary('');
+    setAiSummaryNoteTitle(selectedNote.title);
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/ai/summarize/${selectedNote.id}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to generate summary');
+      }
+
+      setAiSummary(data.summary);
+    } catch (error) {
+      setAiSummaryError(error.message);
+    } finally {
+      setAiSummaryLoading(false);
+    }
+  };
+
+  const closeAISummaryModal = () => {
+    setShowAISummary(false);
+    setAiSummary('');
+    setAiSummaryError(null);
+    setAiSummaryNoteTitle('');
+  };
+
   const getPageTitle = () => {
     switch (activeView) {
       case 'notes':
@@ -299,6 +347,18 @@ const Dashboard = () => {
                 </>
               ) : (
                 <>
+                  <button
+                    className="btn-note-action btn-ai-summary"
+                    onClick={handleGenerateSummary}
+                    aria-label="Generate AI summary"
+                    title="Generate AI Summary"
+                    disabled={!selectedNote?.content || selectedNote.content.trim() === ''}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M12 2L13.09 8.26L18 6L15.74 10.91L22 12L15.74 13.09L18 18L13.09 15.74L12 22L10.91 15.74L6 18L8.26 13.09L2 12L8.26 10.91L6 6L10.91 8.26L12 2Z" fill="currentColor"/>
+                    </svg>
+                    AI Summary
+                  </button>
                   <button
                     className="btn-note-action btn-edit"
                     onClick={handleEditNote}
@@ -614,6 +674,15 @@ const Dashboard = () => {
         confirmText="Delete"
         cancelText="Cancel"
         variant="danger"
+      />
+
+      <AISummaryModal
+        isOpen={showAISummary}
+        onClose={closeAISummaryModal}
+        noteTitle={aiSummaryNoteTitle}
+        summary={aiSummary}
+        isLoading={aiSummaryLoading}
+        error={aiSummaryError}
       />
     </div>
   );
