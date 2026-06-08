@@ -430,18 +430,21 @@ app.post("/api/chat", async (req, res) => {
           (block) => block.type === "tool_use"
         );
 
-        const toolResults = [];
-        for (const block of toolUseBlocks) {
-          // Let the client know which tool is being called (with its input),
-          // then run it and collect the result.
-          sendEvent({ type: "tool_use", name: block.name, input: block.input });
-          const result = await runTool(block.name, block.input);
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            content: JSON.stringify(result),
-          });
-        }
+        // Announce every tool call up front so the client shows a chip for
+        // each one as it starts, then run them all at the same time and wait
+        // for the whole batch together. Promise.all preserves order, so the
+        // tool_result blocks still line up with their tool_use blocks.
+        const toolResults = await Promise.all(
+          toolUseBlocks.map(async (block) => {
+            sendEvent({ type: "tool_use", name: block.name, input: block.input });
+            const result = await runTool(block.name, block.input);
+            return {
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: JSON.stringify(result),
+            };
+          })
+        );
 
         convo.push({ role: "user", content: toolResults });
         continue;
