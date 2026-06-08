@@ -192,6 +192,28 @@ function describeWeatherCode(code) {
   return WEATHER_CODES[code] ?? `Unknown (code ${code})`;
 }
 
+// Fetch with a hard timeout so a hung external API can't stall the whole
+// conversation, plus one quick retry on a timeout/network failure. Throws a
+// descriptive Error if every attempt fails; callers turn that into a clear
+// error result so the assistant can report the problem and keep going.
+async function fetchWithTimeout(url, { timeoutMs = 6000, retries = 1 } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      return res;
+    } catch (err) {
+      clearTimeout(timer);
+      lastErr = err;
+    }
+  }
+  const timedOut = lastErr?.name === "AbortError";
+  throw new Error(timedOut ? "request timed out" : "request failed");
+}
+
 async function convertCurrency({ amount, from, to }) {
   const base = String(from || "").toUpperCase();
   const target = String(to || "").toUpperCase();
@@ -199,7 +221,12 @@ async function convertCurrency({ amount, from, to }) {
     `https://api.frankfurter.app/latest?amount=${encodeURIComponent(amount)}` +
     `&from=${encodeURIComponent(base)}&to=${encodeURIComponent(target)}`;
 
-  const apiRes = await fetch(url);
+  let apiRes;
+  try {
+    apiRes = await fetchWithTimeout(url);
+  } catch {
+    return { error: "Currency API did not respond in time. Please try again." };
+  }
   if (!apiRes.ok) {
     return { error: `Currency API request failed (HTTP ${apiRes.status}).` };
   }
@@ -230,7 +257,12 @@ async function geocodePlace({ name }) {
     "https://geocoding-api.open-meteo.com/v1/search" +
     `?name=${encodeURIComponent(query)}&count=1&language=en&format=json`;
 
-  const apiRes = await fetch(url);
+  let apiRes;
+  try {
+    apiRes = await fetchWithTimeout(url);
+  } catch {
+    return { error: "Geocoding API did not respond in time. Please try again." };
+  }
   if (!apiRes.ok) {
     return { error: `Geocoding API request failed (HTTP ${apiRes.status}).` };
   }
@@ -264,7 +296,12 @@ async function getWeather({ latitude, longitude }) {
     "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
     "&timezone=auto&forecast_days=3";
 
-  const apiRes = await fetch(url);
+  let apiRes;
+  try {
+    apiRes = await fetchWithTimeout(url);
+  } catch {
+    return { error: "Weather API did not respond in time. Please try again." };
+  }
   if (!apiRes.ok) {
     return { error: `Weather API request failed (HTTP ${apiRes.status}).` };
   }
@@ -330,7 +367,7 @@ async function getDestinationGuide({ place }) {
       "?action=query&prop=extracts&exintro=1&explaintext=1" +
       "&redirects=1&format=json&origin=*" +
       `&titles=${encodeURIComponent(query)}`;
-    const voyageRes = await fetch(voyageUrl);
+    const voyageRes = await fetchWithTimeout(voyageUrl);
     if (voyageRes.ok) {
       const data = await voyageRes.json();
       const pages = data?.query?.pages || {};
@@ -354,7 +391,7 @@ async function getDestinationGuide({ place }) {
     const wikiUrl =
       "https://en.wikipedia.org/api/rest_v1/page/summary/" +
       encodeURIComponent(query.replace(/\s+/g, "_"));
-    const wikiRes = await fetch(wikiUrl);
+    const wikiRes = await fetchWithTimeout(wikiUrl);
     if (wikiRes.ok) {
       const data = await wikiRes.json();
       const overview = shortenOverview(data?.extract);
@@ -403,9 +440,9 @@ async function getTravelAdvisory({ country }) {
 
   let apiRes;
   try {
-    apiRes = await fetch(url);
+    apiRes = await fetchWithTimeout(url);
   } catch {
-    return { error: "Could not reach the GOV.UK travel advice API." };
+    return { error: "GOV.UK travel advice API did not respond in time. Please try again." };
   }
 
   if (apiRes.status === 404) {
