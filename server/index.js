@@ -112,6 +112,27 @@ const TOOLS = [
       required: ["latitude", "longitude"],
     },
   },
+  {
+    name: "get_destination_guide",
+    description:
+      "Get a short travel overview for a place (city, region, or country) by " +
+      "name, using the free, keyless Wikivoyage API (falling back to the " +
+      "Wikipedia summary API). Returns a couple of short paragraphs on what " +
+      "the place is known for and what's worth seeing. Use this when the user " +
+      "wants to know what a destination is like or what to do there. Summarize " +
+      "the returned text in your own words rather than pasting it verbatim.",
+    input_schema: {
+      type: "object",
+      properties: {
+        place: {
+          type: "string",
+          description:
+            "The destination name to look up, e.g. 'Kyoto', 'Tuscany', or 'Peru'.",
+        },
+      },
+      required: ["place"],
+    },
+  },
 ];
 
 // Minimal WMO weather code descriptions so the model can phrase conditions
@@ -256,6 +277,80 @@ async function getWeather({ latitude, longitude }) {
   };
 }
 
+// Trim a long extract down to the first couple of paragraphs (and a hard
+// character cap) so the returned text stays short and easy to summarize.
+function shortenOverview(text, { maxParagraphs = 2, maxChars = 900 } = {}) {
+  const cleaned = String(text || "").trim();
+  if (!cleaned) return "";
+  let overview = cleaned
+    .split(/\n+/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .slice(0, maxParagraphs)
+    .join("\n\n");
+  if (overview.length > maxChars) {
+    overview = overview.slice(0, maxChars).replace(/\s+\S*$/, "") + "…";
+  }
+  return overview;
+}
+
+async function getDestinationGuide({ place }) {
+  const query = String(place || "").trim();
+  if (!query) {
+    return { error: "A place name is required." };
+  }
+
+  // First choice: Wikivoyage, which is travel-focused. Its MediaWiki API
+  // returns the lead section as plain text when we ask for the intro extract.
+  try {
+    const voyageUrl =
+      "https://en.wikivoyage.org/w/api.php" +
+      "?action=query&prop=extracts&exintro=1&explaintext=1" +
+      "&redirects=1&format=json&origin=*" +
+      `&titles=${encodeURIComponent(query)}`;
+    const voyageRes = await fetch(voyageUrl);
+    if (voyageRes.ok) {
+      const data = await voyageRes.json();
+      const pages = data?.query?.pages || {};
+      const page = Object.values(pages)[0];
+      const overview = shortenOverview(page?.extract);
+      if (page && page.missing === undefined && overview) {
+        return {
+          place: page.title || query,
+          overview,
+          source: "Wikivoyage",
+        };
+      }
+    }
+  } catch {
+    // Fall through to the Wikipedia fallback below.
+  }
+
+  // Fallback: the Wikipedia REST summary API, which is simpler and almost
+  // always has something for a named place.
+  try {
+    const wikiUrl =
+      "https://en.wikipedia.org/api/rest_v1/page/summary/" +
+      encodeURIComponent(query.replace(/\s+/g, "_"));
+    const wikiRes = await fetch(wikiUrl);
+    if (wikiRes.ok) {
+      const data = await wikiRes.json();
+      const overview = shortenOverview(data?.extract);
+      if (overview) {
+        return {
+          place: data.title || query,
+          overview,
+          source: "Wikipedia",
+        };
+      }
+    }
+  } catch {
+    // Handled by the generic error return below.
+  }
+
+  return { error: `No travel overview found for "${query}".` };
+}
+
 async function runTool(name, input) {
   switch (name) {
     case "get_current_time": {
@@ -271,6 +366,8 @@ async function runTool(name, input) {
       return geocodePlace(input || {});
     case "get_weather":
       return getWeather(input || {});
+    case "get_destination_guide":
+      return getDestinationGuide(input || {});
     default:
       return { error: `Unknown tool: ${name}` };
   }
