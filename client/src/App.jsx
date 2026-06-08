@@ -1,6 +1,22 @@
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 
+// Build a short, human-readable summary of a tool's input for the chip.
+function formatToolInput(input) {
+  if (!input || typeof input !== "object") return "";
+  const entries = Object.entries(input).filter(
+    ([, v]) => v !== null && v !== undefined && v !== ""
+  );
+  if (entries.length === 0) return "";
+
+  // Currency conversion reads best as "100 USD → EUR".
+  if ("amount" in input && "from" in input && "to" in input) {
+    return `${input.amount} ${input.from} → ${input.to}`;
+  }
+
+  return entries.map(([k, v]) => `${k}: ${v}`).join(", ");
+}
+
 const WELCOME = {
   role: "assistant",
   content:
@@ -50,28 +66,46 @@ export default function App() {
         throw new Error(data.error || "Request failed.");
       }
 
-      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+      setMessages((prev) => [...prev, { role: "assistant", content: "", tools: [] }]);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = "";
       let done = false;
+
+      const handleEvent = (event) => {
+        setMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (event.type === "tool_use") {
+            updated[updated.length - 1] = {
+              ...last,
+              tools: [...(last.tools || []), { name: event.name, input: event.input }],
+            };
+          } else if (event.type === "text") {
+            updated[updated.length - 1] = { ...last, content: event.text };
+          }
+          return updated;
+        });
+      };
 
       while (!done) {
         const { value, done: streamDone } = await reader.read();
         done = streamDone;
         if (value) {
-          const chunk = decoder.decode(value, { stream: true });
-          setMessages((prev) => {
-            const updated = [...prev];
-            const last = updated[updated.length - 1];
-            updated[updated.length - 1] = {
-              ...last,
-              content: last.content + chunk,
-            };
-            return updated;
-          });
+          buffer += decoder.decode(value, { stream: true });
+          // The server sends newline-delimited JSON; process complete lines and
+          // keep any trailing partial line in the buffer for the next read.
+          let newlineIndex;
+          while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+            const line = buffer.slice(0, newlineIndex).trim();
+            buffer = buffer.slice(newlineIndex + 1);
+            if (line) handleEvent(JSON.parse(line));
+          }
         }
       }
+      const leftover = buffer.trim();
+      if (leftover) handleEvent(JSON.parse(leftover));
     } catch (err) {
       setError(err.message || "Something went wrong.");
     } finally {
@@ -87,16 +121,42 @@ export default function App() {
       </header>
 
       <main className="chat" ref={scrollRef} aria-live="polite" aria-label="Conversation">
-        {messages.map((m, i) => (
-          <div key={i} className={`message message-${m.role}`}>
-            <div className="message-role" aria-hidden="true">
-              {m.role === "user" ? "You" : "Assistant"}
+        {messages.map((m, i) => {
+          const isLast = i === messages.length - 1;
+          const isPending = m.role === "assistant" && !m.content && loading && isLast;
+          return (
+            <div key={i} className={`message message-${m.role}`}>
+              <div className="message-role" aria-hidden="true">
+                {m.role === "user" ? "You" : "Assistant"}
+              </div>
+              {m.tools && m.tools.length > 0 && (
+                <ul className="tool-uses" aria-label="Tools used">
+                  {m.tools.map((tool, t) => {
+                    const summary = formatToolInput(tool.input);
+                    return (
+                      <li key={t} className="tool-use">
+                        <span className="tool-use-icon" aria-hidden="true">⚙</span>
+                        <span>
+                          Used tool: <code>{tool.name}</code>
+                          {summary && <span className="tool-use-args">{summary}</span>}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {isPending ? (
+                <div className="message-content typing">Thinking…</div>
+              ) : (
+                m.content && (
+                  <div className="message-content">
+                    <ReactMarkdown>{m.content}</ReactMarkdown>
+                  </div>
+                )
+              )}
             </div>
-            <div className="message-content">
-              <ReactMarkdown>{m.content}</ReactMarkdown>
-            </div>
-          </div>
-        ))}
+          );
+        })}
         {loading && messages[messages.length - 1]?.role === "user" && (
           <div className="message message-assistant">
             <div className="message-role" aria-hidden="true">Assistant</div>

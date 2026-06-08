@@ -31,7 +31,7 @@ const SYSTEM_PROMPT = [
   "for one. Use markdown for light structure when it aids readability.",
 ].join("\n");
 
-const MODEL = "claude-sonnet-4-5-20250929";
+const MODEL = "claude-opus-4-8";
 
 const TOOLS = [
   {
@@ -46,9 +46,217 @@ const TOOLS = [
       required: [],
     },
   },
+  {
+    name: "convert_currency",
+    description:
+      "Convert an amount of money from one currency to another using live " +
+      "exchange rates from the Frankfurter API. Use this whenever the user " +
+      "asks to convert money or about exchange rates. Do not guess rates, " +
+      "since you do not know today's exchange rates.",
+    input_schema: {
+      type: "object",
+      properties: {
+        amount: {
+          type: "number",
+          description: "The amount of money to convert, e.g. 100.",
+        },
+        from: {
+          type: "string",
+          description: "The source currency as a 3-letter ISO code, e.g. 'USD'.",
+        },
+        to: {
+          type: "string",
+          description: "The target currency as a 3-letter ISO code, e.g. 'EUR'.",
+        },
+      },
+      required: ["amount", "from", "to"],
+    },
+  },
+  {
+    name: "geocode_place",
+    description:
+      "Look up the geographic coordinates (latitude and longitude) of a city " +
+      "or place by name, using the Open-Meteo geocoding API. Use this first " +
+      "when the user asks about a place by name and you need its coordinates " +
+      "(for example, before getting its weather).",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "The city or place name to look up, e.g. 'Paris' or 'Kyoto'.",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "get_weather",
+    description:
+      "Get the current conditions and a short daily forecast for a location " +
+      "given its latitude and longitude, using the Open-Meteo forecast API. " +
+      "If you only have a place name, call geocode_place first to get the " +
+      "coordinates, then pass them here.",
+    input_schema: {
+      type: "object",
+      properties: {
+        latitude: {
+          type: "number",
+          description: "Latitude of the location, e.g. 48.8566.",
+        },
+        longitude: {
+          type: "number",
+          description: "Longitude of the location, e.g. 2.3522.",
+        },
+      },
+      required: ["latitude", "longitude"],
+    },
+  },
 ];
 
-function runTool(name, _input) {
+// Minimal WMO weather code descriptions so the model can phrase conditions
+// without guessing what a numeric code means.
+const WEATHER_CODES = {
+  0: "Clear sky",
+  1: "Mainly clear",
+  2: "Partly cloudy",
+  3: "Overcast",
+  45: "Fog",
+  48: "Depositing rime fog",
+  51: "Light drizzle",
+  53: "Moderate drizzle",
+  55: "Dense drizzle",
+  61: "Slight rain",
+  63: "Moderate rain",
+  65: "Heavy rain",
+  66: "Light freezing rain",
+  67: "Heavy freezing rain",
+  71: "Slight snow",
+  73: "Moderate snow",
+  75: "Heavy snow",
+  77: "Snow grains",
+  80: "Slight rain showers",
+  81: "Moderate rain showers",
+  82: "Violent rain showers",
+  85: "Slight snow showers",
+  86: "Heavy snow showers",
+  95: "Thunderstorm",
+  96: "Thunderstorm with slight hail",
+  99: "Thunderstorm with heavy hail",
+};
+
+function describeWeatherCode(code) {
+  return WEATHER_CODES[code] ?? `Unknown (code ${code})`;
+}
+
+async function convertCurrency({ amount, from, to }) {
+  const base = String(from || "").toUpperCase();
+  const target = String(to || "").toUpperCase();
+  const url =
+    `https://api.frankfurter.app/latest?amount=${encodeURIComponent(amount)}` +
+    `&from=${encodeURIComponent(base)}&to=${encodeURIComponent(target)}`;
+
+  const apiRes = await fetch(url);
+  if (!apiRes.ok) {
+    return { error: `Currency API request failed (HTTP ${apiRes.status}).` };
+  }
+
+  const data = await apiRes.json();
+  const converted = data?.rates?.[target];
+  if (typeof converted !== "number") {
+    return { error: `Could not convert ${base} to ${target}.` };
+  }
+
+  return {
+    amount,
+    from: base,
+    to: target,
+    converted,
+    rate: amount ? converted / amount : null,
+    date: data.date,
+  };
+}
+
+async function geocodePlace({ name }) {
+  const query = String(name || "").trim();
+  if (!query) {
+    return { error: "A place name is required." };
+  }
+
+  const url =
+    "https://geocoding-api.open-meteo.com/v1/search" +
+    `?name=${encodeURIComponent(query)}&count=1&language=en&format=json`;
+
+  const apiRes = await fetch(url);
+  if (!apiRes.ok) {
+    return { error: `Geocoding API request failed (HTTP ${apiRes.status}).` };
+  }
+
+  const data = await apiRes.json();
+  const place = data?.results?.[0];
+  if (!place) {
+    return { error: `No coordinates found for "${query}".` };
+  }
+
+  return {
+    name: place.name,
+    latitude: place.latitude,
+    longitude: place.longitude,
+    country: place.country,
+    admin1: place.admin1,
+    timezone: place.timezone,
+  };
+}
+
+async function getWeather({ latitude, longitude }) {
+  if (typeof latitude !== "number" || typeof longitude !== "number") {
+    return { error: "Both latitude and longitude (as numbers) are required." };
+  }
+
+  const url =
+    "https://api.open-meteo.com/v1/forecast" +
+    `?latitude=${encodeURIComponent(latitude)}` +
+    `&longitude=${encodeURIComponent(longitude)}` +
+    "&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m" +
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
+    "&timezone=auto&forecast_days=3";
+
+  const apiRes = await fetch(url);
+  if (!apiRes.ok) {
+    return { error: `Weather API request failed (HTTP ${apiRes.status}).` };
+  }
+
+  const data = await apiRes.json();
+  const current = data.current || {};
+  const daily = data.daily || {};
+
+  const forecast = (daily.time || []).map((date, i) => ({
+    date,
+    conditions: describeWeatherCode(daily.weather_code?.[i]),
+    high: daily.temperature_2m_max?.[i],
+    low: daily.temperature_2m_min?.[i],
+    precipitationChance: daily.precipitation_probability_max?.[i],
+  }));
+
+  return {
+    latitude,
+    longitude,
+    units: {
+      temperature: data.current_units?.temperature_2m ?? "°C",
+      windSpeed: data.current_units?.wind_speed_10m ?? "km/h",
+    },
+    current: {
+      temperature: current.temperature_2m,
+      feelsLike: current.apparent_temperature,
+      humidity: current.relative_humidity_2m,
+      windSpeed: current.wind_speed_10m,
+      conditions: describeWeatherCode(current.weather_code),
+    },
+    forecast,
+  };
+}
+
+async function runTool(name, input) {
   switch (name) {
     case "get_current_time": {
       const now = new Date();
@@ -57,6 +265,12 @@ function runTool(name, _input) {
         local: now.toString(),
       };
     }
+    case "convert_currency":
+      return convertCurrency(input || {});
+    case "geocode_place":
+      return geocodePlace(input || {});
+    case "get_weather":
+      return getWeather(input || {});
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -80,6 +294,16 @@ app.post("/api/chat", async (req, res) => {
         .json({ error: "Server is missing ANTHROPIC_API_KEY. Add it to server/.env." });
     }
 
+    // We stream newline-delimited JSON events so the client can show what's
+    // happening as the loop runs (e.g. which tool is being called) before the
+    // final answer arrives. Each line is one JSON object with a "type".
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+    if (typeof res.flushHeaders === "function") {
+      res.flushHeaders();
+    }
+    const sendEvent = (event) => res.write(JSON.stringify(event) + "\n");
+
     // Conversation we send to Claude. We append assistant tool_use turns and
     // user tool_result turns as the tool-use loop progresses.
     const convo = messages.map((m) => ({
@@ -89,7 +313,6 @@ app.post("/api/chat", async (req, res) => {
 
     // Run the tool-use loop until Claude returns a normal final answer.
     // The maxTurns cap is a safety net against an unexpected loop.
-    let finalText = "";
     const maxTurns = 8;
 
     for (let turn = 0; turn < maxTurns; turn++) {
@@ -106,29 +329,37 @@ app.post("/api/chat", async (req, res) => {
         // verbatim so the follow-up tool_result blocks line up with it.
         convo.push({ role: "assistant", content: response.content });
 
-        const toolResults = response.content
-          .filter((block) => block.type === "tool_use")
-          .map((block) => ({
+        const toolUseBlocks = response.content.filter(
+          (block) => block.type === "tool_use"
+        );
+
+        const toolResults = [];
+        for (const block of toolUseBlocks) {
+          // Let the client know which tool is being called (with its input),
+          // then run it and collect the result.
+          sendEvent({ type: "tool_use", name: block.name, input: block.input });
+          const result = await runTool(block.name, block.input);
+          toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
-            content: JSON.stringify(runTool(block.name, block.input)),
-          }));
+            content: JSON.stringify(result),
+          });
+        }
 
         convo.push({ role: "user", content: toolResults });
         continue;
       }
 
-      // Normal final answer: collect the text blocks and stop looping.
-      finalText = response.content
+      // Normal final answer: collect the text blocks and finish.
+      const finalText = response.content
         .filter((block) => block.type === "text")
         .map((block) => block.text)
         .join("");
+      sendEvent({ type: "text", text: finalText });
       break;
     }
 
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache");
-    res.send(finalText);
+    res.end();
   } catch (err) {
     console.error("Error calling Anthropic:", err);
     if (res.headersSent) {
