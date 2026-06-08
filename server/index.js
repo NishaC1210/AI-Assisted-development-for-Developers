@@ -133,6 +133,28 @@ const TOOLS = [
       required: ["place"],
     },
   },
+  {
+    name: "get_travel_advisory",
+    description:
+      "Get the current UK government (FCDO) foreign travel advice for a " +
+      "country, using the free, keyless GOV.UK Content API. Returns the alert " +
+      "status and a short summary of the advice. Use this when the user asks " +
+      "whether a country is safe to visit or about travel advisories/warnings. " +
+      "Make clear in your reply that this is UK government (FCDO) advice. If no " +
+      "advisory page exists for the country, report that none was found.",
+    input_schema: {
+      type: "object",
+      properties: {
+        country: {
+          type: "string",
+          description:
+            "The country name, e.g. 'Portugal' or 'South Korea'. It will be " +
+            "lowercased and hyphenated to match the GOV.UK URL.",
+        },
+      },
+      required: ["country"],
+    },
+  },
 ];
 
 // Minimal WMO weather code descriptions so the model can phrase conditions
@@ -351,6 +373,83 @@ async function getDestinationGuide({ place }) {
   return { error: `No travel overview found for "${query}".` };
 }
 
+// FCDO alert codes are machine-readable; turn them into a plain-English phrase.
+function describeAlertStatus(code) {
+  const map = {
+    avoid_all_travel: "FCDO advises against all travel to the whole country",
+    avoid_all_but_essential_travel:
+      "FCDO advises against all but essential travel to the whole country",
+    avoid_all_travel_to_parts:
+      "FCDO advises against all travel to parts of the country",
+    avoid_all_but_essential_travel_to_parts:
+      "FCDO advises against all but essential travel to parts of the country",
+  };
+  return map[code] || code.replace(/_/g, " ");
+}
+
+async function getTravelAdvisory({ country }) {
+  const raw = String(country || "").trim();
+  if (!raw) {
+    return { error: "A country name is required." };
+  }
+
+  // GOV.UK uses lowercased, hyphenated slugs, e.g. "South Korea" -> "south-korea".
+  const slug = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  const url = `https://www.gov.uk/api/content/foreign-travel-advice/${slug}`;
+
+  let apiRes;
+  try {
+    apiRes = await fetch(url);
+  } catch {
+    return { error: "Could not reach the GOV.UK travel advice API." };
+  }
+
+  if (apiRes.status === 404) {
+    return {
+      source: "UK FCDO (GOV.UK)",
+      found: false,
+      message: `No UK FCDO travel advisory page found for "${raw}".`,
+    };
+  }
+  if (!apiRes.ok) {
+    return { error: `GOV.UK API request failed (HTTP ${apiRes.status}).` };
+  }
+
+  const data = await apiRes.json();
+  const details = data?.details || {};
+  const alertCodes = Array.isArray(details.alert_status) ? details.alert_status : [];
+
+  // The "Warnings and insurance" part holds the headline advice; strip the
+  // HTML and keep a short excerpt so we don't return the whole (large) page.
+  const warningsPart = (details.parts || []).find((p) => /warnings/i.test(p.title));
+  let summary = "";
+  if (warningsPart?.body) {
+    summary = warningsPart.body
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 600);
+    if (warningsPart.body.length > summary.length) summary += "…";
+  }
+
+  return {
+    source: "UK FCDO (GOV.UK)",
+    found: true,
+    country: data.title || raw,
+    alertStatus:
+      alertCodes.length > 0
+        ? alertCodes.map(describeAlertStatus)
+        : ["No specific FCDO travel warning against travel to this country."],
+    summary: summary || data.description || "",
+    lastUpdated: data.public_updated_at || details.updated_at || null,
+    url: data.base_path ? `https://www.gov.uk${data.base_path}` : url,
+  };
+}
+
 async function runTool(name, input) {
   switch (name) {
     case "get_current_time": {
@@ -368,6 +467,8 @@ async function runTool(name, input) {
       return getWeather(input || {});
     case "get_destination_guide":
       return getDestinationGuide(input || {});
+    case "get_travel_advisory":
+      return getTravelAdvisory(input || {});
     default:
       return { error: `Unknown tool: ${name}` };
   }
