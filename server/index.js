@@ -31,6 +31,37 @@ const SYSTEM_PROMPT = [
   "for one. Use markdown for light structure when it aids readability.",
 ].join("\n");
 
+const MODEL = "claude-sonnet-4-5-20250929";
+
+const TOOLS = [
+  {
+    name: "get_current_time",
+    description:
+      "Get the current date and time from the server. Use this whenever the " +
+      "user asks about the current date, time, day of the week, or anything " +
+      "that depends on knowing 'now'. Do not guess the date.",
+    input_schema: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
+];
+
+function runTool(name, _input) {
+  switch (name) {
+    case "get_current_time": {
+      const now = new Date();
+      return {
+        iso: now.toISOString(),
+        local: now.toString(),
+      };
+    }
+    default:
+      return { error: `Unknown tool: ${name}` };
+  }
+}
+
 app.get("/api/health", (req, res) => {
   res.json({ ok: true });
 });
@@ -49,29 +80,55 @@ app.post("/api/chat", async (req, res) => {
         .json({ error: "Server is missing ANTHROPIC_API_KEY. Add it to server/.env." });
     }
 
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    if (typeof res.flushHeaders === "function") {
-      res.flushHeaders();
+    // Conversation we send to Claude. We append assistant tool_use turns and
+    // user tool_result turns as the tool-use loop progresses.
+    const convo = messages.map((m) => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: m.content,
+    }));
+
+    // Run the tool-use loop until Claude returns a normal final answer.
+    // The maxTurns cap is a safety net against an unexpected loop.
+    let finalText = "";
+    const maxTurns = 8;
+
+    for (let turn = 0; turn < maxTurns; turn++) {
+      const response = await anthropic.messages.create({
+        model: MODEL,
+        max_tokens: 1024,
+        system: SYSTEM_PROMPT,
+        tools: TOOLS,
+        messages: convo,
+      });
+
+      if (response.stop_reason === "tool_use") {
+        // Record the assistant turn (which includes the tool_use blocks)
+        // verbatim so the follow-up tool_result blocks line up with it.
+        convo.push({ role: "assistant", content: response.content });
+
+        const toolResults = response.content
+          .filter((block) => block.type === "tool_use")
+          .map((block) => ({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: JSON.stringify(runTool(block.name, block.input)),
+          }));
+
+        convo.push({ role: "user", content: toolResults });
+        continue;
+      }
+
+      // Normal final answer: collect the text blocks and stop looping.
+      finalText = response.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("");
+      break;
     }
 
-    const stream = anthropic.messages.stream({
-      model: "claude-sonnet-4-5-20250929",
-      max_tokens: 1024,
-      system: SYSTEM_PROMPT,
-      messages: messages.map((m) => ({
-        role: m.role === "assistant" ? "assistant" : "user",
-        content: m.content,
-      })),
-    });
-
-    stream.on("text", (textDelta) => {
-      res.write(textDelta);
-    });
-
-    await stream.finalMessage();
-    res.end();
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+    res.send(finalText);
   } catch (err) {
     console.error("Error calling Anthropic:", err);
     if (res.headersSent) {
