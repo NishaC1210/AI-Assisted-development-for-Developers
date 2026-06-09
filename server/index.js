@@ -1,4 +1,6 @@
 import "dotenv/config";
+import path from "path";
+import { fileURLToPath } from "url";
 import express from "express";
 import cors from "cors";
 import Anthropic from "@anthropic-ai/sdk";
@@ -6,8 +8,14 @@ import Anthropic from "@anthropic-ai/sdk";
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const clientDist = path.join(__dirname, "..", "client", "dist");
+
 app.use(cors());
 app.use(express.json());
+
+// Serve the built client (produced by `vite build` into client/dist).
+app.use(express.static(clientDist));
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -650,6 +658,12 @@ app.post("/api/chat", async (req, res) => {
       res.status(500).json({ error: "Failed to get a response from Claude." });
     }
   }
+});
+
+// SPA fallback: any non-/api route serves the client's index.html so the
+// React app handles routing and direct loads / refreshes work.
+app.get(/^\/(?!api\/).*/, (req, res) => {
+  res.sendFile(path.join(clientDist, "index.html"));
 });
 
 app.listen(PORT, () => {
