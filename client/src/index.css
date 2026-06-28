@@ -1,18 +1,42 @@
+/* ─────────────────────────────────────────────────────────────
+   DESIGN TOKENS
+   CSS custom properties (variables) defined on :root are
+   available everywhere in the stylesheet. Centralizing colors
+   here means you only need to change a value in one place if
+   you want to retheme the app. The palette is a dark "navy"
+   scheme: deep blue backgrounds, an orange accent, and light
+   text for readability.
+   ───────────────────────────────────────────────────────────── */
 :root {
-  --bg: #0f1b2d;
-  --panel: #16263d;
-  --user: #1f6f5c;
-  --assistant: #22344f;
-  --accent: #e8853b;
-  --text: #eaf0f7;
-  --muted: #9fb1c7;
-  --border: #2a3d57;
+  --bg: #0f1b2d;        /* outermost page background */
+  --panel: #16263d;     /* chat window and input field background */
+  --user: #1f6f5c;      /* bubble background for user messages */
+  --assistant: #22344f; /* bubble background for assistant messages */
+  --accent: #e8853b;    /* orange highlight: send button, focus ring, tool icons */
+  --text: #eaf0f7;      /* primary text color */
+  --muted: #9fb1c7;     /* secondary/subdued text (role labels, subtext) */
+  --border: #2a3d57;    /* border color for panels and chips */
 }
 
+/* ─────────────────────────────────────────────────────────────
+   BOX MODEL RESET
+   By default, browsers add an element's padding and border on
+   top of its declared width. Setting box-sizing to border-box
+   changes that so padding and border are included inside the
+   width, which makes layout math much more predictable.
+   ───────────────────────────────────────────────────────────── */
 * {
   box-sizing: border-box;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   FULL-HEIGHT FOUNDATION
+   The app needs to fill the entire viewport without scrolling
+   the outer page — only the chat area scrolls internally.
+   Setting height: 100% on html, body, and #root (the React
+   mount point) creates an unbroken chain so the .app container
+   can stretch to fill the full window height.
+   ───────────────────────────────────────────────────────────── */
 html,
 body,
 #root {
@@ -20,12 +44,27 @@ body,
   margin: 0;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   BODY BASE STYLES
+   Applies the dark background and light text globally, and sets
+   a sensible font stack that prefers the operating system's own
+   UI font before falling back to common alternatives.
+   ───────────────────────────────────────────────────────────── */
 body {
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
   color: var(--text);
 }
 
+/* ─────────────────────────────────────────────────────────────
+   ACCESSIBILITY UTILITY — SCREEN-READER-ONLY
+   This class visually hides an element while keeping it
+   accessible to screen readers. It is used on the <label> for
+   the composer input so sighted users see a clean UI while
+   assistive technology still announces the field's purpose.
+   The clip and overflow properties do the actual hiding;
+   the tiny 1px size prevents the element from affecting layout.
+   ───────────────────────────────────────────────────────────── */
 .sr-only {
   position: absolute;
   width: 1px;
@@ -38,6 +77,15 @@ body {
   border: 0;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   APP SHELL
+   The outermost <div> that wraps the entire UI. It uses flexbox
+   in a column direction so the header, chat window, and
+   composer stack vertically. max-width caps the layout at 760px
+   and margin: 0 auto centers it on wide screens. Because the
+   chat uses flex: 1 (see below), it will expand to fill all
+   remaining vertical space between the header and composer.
+   ───────────────────────────────────────────────────────────── */
 .app {
   max-width: 760px;
   margin: 0 auto;
@@ -48,6 +96,13 @@ body {
   gap: 12px;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   PAGE HEADER
+   Styles the <header> that contains the app title and tagline.
+   The heading resets its default margin so spacing is controlled
+   by the parent's gap. The tagline uses the muted color to give
+   it visual hierarchy below the title.
+   ───────────────────────────────────────────────────────────── */
 .app-header h1 {
   margin: 0;
   font-size: 1.5rem;
@@ -59,6 +114,15 @@ body {
   font-size: 0.95rem;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   CHAT WINDOW
+   The scrollable area where conversation messages appear.
+   flex: 1 makes it grow to fill the space between the header
+   and composer. overflow-y: auto adds a scrollbar only when
+   needed. Messages stack vertically via flex-direction: column
+   with a gap between them. The panel background and border give
+   it a "card" feel inside the darker page background.
+   ───────────────────────────────────────────────────────────── */
 .chat {
   flex: 1;
   overflow-y: auto;
@@ -71,6 +135,14 @@ body {
   gap: 14px;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   MESSAGE BUBBLES — BASE
+   Each message is a flex column containing an optional role
+   label, optional tool-use chips, and the text bubble. Capping
+   width at 85% prevents messages from stretching edge to edge,
+   which improves readability and gives the chat a more natural
+   conversational feel.
+   ───────────────────────────────────────────────────────────── */
 .message {
   display: flex;
   flex-direction: column;
@@ -78,20 +150,39 @@ body {
   max-width: 85%;
 }
 
+/* User messages are right-aligned; align-self positions the
+   whole message block to the right edge of the chat window,
+   and align-items: flex-end right-aligns the children (role
+   label and bubble) within the block. */
 .message-user {
   align-self: flex-end;
   align-items: flex-end;
 }
 
+/* Assistant messages sit at the left edge (the default for
+   flex children), so only align-self is needed to be explicit. */
 .message-assistant {
   align-self: flex-start;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   MESSAGE ROLE LABEL
+   The small "You" / "Assistant" label above each bubble.
+   aria-hidden="true" is set in the JSX, so screen readers skip
+   it — the live region on the chat container announces new
+   messages without this redundant label.
+   ───────────────────────────────────────────────────────────── */
 .message-role {
   font-size: 0.75rem;
   color: var(--muted);
 }
 
+/* ─────────────────────────────────────────────────────────────
+   MESSAGE CONTENT BUBBLE
+   Shared styles for both bubble types: padding, rounded corners,
+   comfortable line-height, and word-wrap so long URLs or strings
+   don't overflow the bubble.
+   ───────────────────────────────────────────────────────────── */
 .message-content {
   padding: 10px 14px;
   border-radius: 12px;
@@ -99,18 +190,30 @@ body {
   word-wrap: break-word;
 }
 
+/* User bubble gets the green-tinted background. */
 .message-user .message-content {
   background: var(--user);
 }
 
+/* Assistant bubble gets the blue-tinted background. */
 .message-assistant .message-content {
   background: var(--assistant);
 }
 
+/* ─────────────────────────────────────────────────────────────
+   MARKDOWN CONTENT INSIDE BUBBLES
+   Assistant responses are rendered with ReactMarkdown, which
+   wraps text in <p>, <ul>, <ol>, and other elements. These
+   rules tighten the default browser spacing so paragraphs and
+   lists feel compact inside a chat bubble rather than like a
+   document page.
+   ───────────────────────────────────────────────────────────── */
 .message-content p {
   margin: 0 0 8px;
 }
 
+/* Remove the bottom margin from the last paragraph so the
+   bubble's own padding provides the bottom spacing. */
 .message-content p:last-child {
   margin-bottom: 0;
 }
@@ -121,11 +224,25 @@ body {
   padding-left: 20px;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   TYPING INDICATOR
+   Applied to the placeholder bubble shown while the assistant
+   is streaming a response ("Thinking…"). The italic style and
+   muted color signal that this is a temporary, in-progress
+   state rather than a finished message.
+   ───────────────────────────────────────────────────────────── */
 .typing {
   color: var(--muted);
   font-style: italic;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   TOOL-USE CHIPS — CONTAINER
+   When the assistant calls a tool (e.g. a currency converter),
+   a row of chips appears above the text bubble. The list resets
+   its default list styles and uses flex-wrap so multiple chips
+   flow onto new lines gracefully if there are many.
+   ───────────────────────────────────────────────────────────── */
 .tool-uses {
   list-style: none;
   margin: 0 0 6px;
@@ -135,6 +252,14 @@ body {
   gap: 6px;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   TOOL-USE CHIPS — INDIVIDUAL CHIP
+   Each chip is a small pill-shaped badge showing which tool
+   was called. border-radius: 999px creates the full pill shape.
+   The semi-transparent accent background (12% opacity orange)
+   ties the chip visually to the accent color without being
+   too bold.
+   ───────────────────────────────────────────────────────────── */
 .tool-use {
   display: inline-flex;
   align-items: center;
@@ -148,20 +273,33 @@ body {
   line-height: 1.3;
 }
 
+/* The tool name is displayed in a <code> element and gets the
+   accent color to stand out from the surrounding muted text. */
 .tool-use code {
   color: var(--accent);
   font-size: 0.78rem;
 }
 
+/* The gear icon (⚙) that precedes the tool name. */
 .tool-use-icon {
   color: var(--accent);
 }
 
+/* The tool's input arguments, shown after the tool name in
+   a lighter primary text color. */
 .tool-use-args {
   margin-left: 6px;
   color: var(--text);
 }
 
+/* ─────────────────────────────────────────────────────────────
+   ERROR BANNER
+   Displayed below the chat window when a network or API error
+   occurs. The deep red background and border clearly signal a
+   problem state. The light pink text keeps contrast readable
+   against the dark red background. role="alert" in the JSX
+   ensures screen readers announce it immediately.
+   ───────────────────────────────────────────────────────────── */
 .error {
   background: #5a1f1f;
   border: 1px solid #8a3a3a;
@@ -171,11 +309,21 @@ body {
   font-size: 0.9rem;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   MESSAGE COMPOSER
+   The form at the bottom of the page containing the text input
+   and Send button. flex + gap lays them side by side with a
+   small space between them.
+   ───────────────────────────────────────────────────────────── */
 .composer {
   display: flex;
   gap: 8px;
 }
 
+/* The text input stretches to fill all available width (flex: 1)
+   while the button stays at its natural size. The background and
+   border match the chat panel so the input looks like part of
+   the same surface. */
 .composer input {
   flex: 1;
   padding: 12px 14px;
@@ -186,11 +334,17 @@ body {
   font-size: 1rem;
 }
 
+/* When the input is focused, a visible orange outline replaces
+   the default browser focus ring, maintaining the accent color
+   theme and meeting accessibility contrast requirements. */
 .composer input:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
+/* The Send button uses the accent color as a solid background
+   with dark text for contrast. font-weight: 600 makes the label
+   slightly bolder to reinforce its role as the primary action. */
 .composer button {
   padding: 12px 20px;
   border-radius: 10px;
@@ -202,11 +356,21 @@ body {
   cursor: pointer;
 }
 
+/* While a request is in flight or the input is empty, the
+   button is disabled. Reduced opacity communicates this state
+   visually, and cursor: not-allowed reinforces it on hover. */
 .composer button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   RESPONSIVE — MOBILE (≤ 600px)
+   On small screens, reduce the outer padding slightly and allow
+   message bubbles to use more of the available width. Everything
+   else (the flex column layout, the chat scroll, the composer
+   row) already adapts naturally to narrow viewports.
+   ───────────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
   .app {
     padding: 10px;
